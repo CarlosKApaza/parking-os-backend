@@ -1,0 +1,67 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL") 
+}
+
+// Modelo de los 7 estacionamientos físicos
+
+enum EstadoOcupacion {
+  DESCONOCIDO
+  LIBRE
+  OCUPADO
+}
+
+model Estacionamiento {
+  id            Int              @id @default(autoincrement())
+  codigo        String           @unique
+  sensorCodigo  String?          @unique
+  estado        EstadoOcupacion  @default(DESCONOCIDO)
+  activo        Boolean          @default(true)
+  ultimaLectura DateTime?
+  fechaCreacion DateTime         @default(now())
+  fechaCambio   DateTime         @updatedAt
+
+  eventos EventoEstacionamiento[]
+
+  @@map("estacionamientos")
+}
+
+
+
+// Origen de los cambios de ocupación
+enum OrigenEvento {
+  SENSOR_IR
+  SIMULACION
+  ADMINISTRADOR
+}
+
+// Historial de cambios de los estacionamientos
+
+model EventoEstacionamiento {
+  id                Int             @id @default(autoincrement())
+  estacionamientoId Int
+  estadoAnterior    EstadoOcupacion
+  estadoNuevo       EstadoOcupacion
+  origen            OrigenEvento    @default(SENSOR_IR)
+  fechaEvento       DateTime        @default(now())
+  
+  estacionamiento Estacionamiento @relation(fields: [estacionamientoId], references: [id])
+
+  @@index([estacionamientoId, fechaEvento])
+  @@map("eventos_estacionamiento")
+}
+
+
+
+
