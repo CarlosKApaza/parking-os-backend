@@ -5,6 +5,7 @@ import { AppService } from './app.service.js';
 import { EstacionamientosModule } from './estacionamientos/estacionamientos.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { SensoresModule } from './sensores/sensores.module.js';
+import { CamarasModule } from './camaras/camaras.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -20,6 +21,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     EstacionamientosModule,
     PrismaModule,
     SensoresModule,
+    CamarasModule,
   ],
   controllers: [AppController],
   providers: [AppService],
