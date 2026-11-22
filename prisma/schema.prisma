@@ -65,3 +65,21 @@ model EventoEstacionamiento {
 
 
 
+
+
+// Una visita comienza al reconocer la placa en la entrada y termina al reconocerla
+// en la salida. Los sensores IR registran ocupacion de plazas, independientemente.
+model VisitaVehiculo {
+  id            Int       @id @default(autoincrement())
+  placa         String    @db.VarChar(12)
+  // MySQL permite varios NULL en un indice UNIQUE; las visitas cerradas quedan en NULL.
+  // Asi solo puede haber una visita abierta por placa, incluso con lecturas concurrentes.
+  placaActiva   String?   @unique @db.VarChar(12)
+  fechaIngreso  DateTime  @default(now())
+  fechaSalida   DateTime?
+  camaraIngreso String?   @db.VarChar(32)
+  camaraSalida  String?   @db.VarChar(32)
+
+  @@index([placa, fechaIngreso])
+  @@map("visitas_vehiculos")
+}
