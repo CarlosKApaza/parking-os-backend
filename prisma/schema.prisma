@@ -33,6 +33,7 @@ model Estacionamiento {
   fechaCambio   DateTime         @updatedAt
 
   eventos EventoEstacionamiento[]
+  reservas Reserva[]
 
   @@map("estacionamientos")
 }
@@ -67,8 +68,9 @@ model EventoEstacionamiento {
 
 
 
-// Una visita comienza al reconocer la placa en la entrada y termina al reconocerla
-// en la salida. Los sensores IR registran ocupacion de plazas, independientemente.
+// Compatibilidad: fechaIngreso y nombres de cámara originales se conservan.
+// El flujo nuevo usará fechaIngresoConfirmada y estado explícito. LEGADO identifica
+// registros de la prueba OCR anterior, no estadías autorizadas para cobrar.
 model VisitaVehiculo {
   id            Int       @id @default(autoincrement())
   placa         String    @db.VarChar(12)
@@ -80,6 +82,303 @@ model VisitaVehiculo {
   camaraIngreso String?   @db.VarChar(32)
   camaraSalida  String?   @db.VarChar(32)
 
+  vehiculoId Int?
+  usuarioId Int?
+  reservaId Int? @unique
+  tarifaId Int?
+  precioHoraAplicado Decimal? @db.Decimal(10,2)
+  modalidadAplicada ModalidadTarifa?
+  toleranciaAplicadaMin Int?
+  fechaIngresoConfirmada DateTime?
+  camaraIngresoId Int?
+  camaraSalidaId Int?
+  estado EstadoVisita @default(LEGADO)
+  vehiculo Vehiculo? @relation(fields: [vehiculoId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  usuario Usuario? @relation(fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reserva Reserva? @relation(fields: [reservaId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  tarifa Tarifa? @relation(fields: [tarifaId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  camaraEntrada Camara? @relation("CamaraIngreso", fields: [camaraIngresoId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  camaraEgreso Camara? @relation("CamaraSalida", fields: [camaraSalidaId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  ticket Ticket?
+  lecturas LecturaOCR[]
+  eventosBarrera EventoBarrera[]
+  @@index([vehiculoId])
+  @@index([usuarioId])
+  @@index([tarifaId])
+  @@index([camaraIngresoId])
+  @@index([camaraSalidaId])
+  @@index([estado])
+
   @@index([placa, fechaIngreso])
   @@map("visitas_vehiculos")
+}
+
+enum RolUsuario {
+  CLIENTE
+  ADMINISTRADOR
+}
+
+enum EstadoVerificacionVehiculo {
+  PENDIENTE
+  VERIFICADO
+  RECHAZADO
+}
+
+enum EstadoReserva {
+  PENDIENTE
+  CONFIRMADA
+  EN_USO
+  FINALIZADA
+  CANCELADA
+  VENCIDA
+}
+
+enum ModalidadTarifa {
+  POR_MINUTO
+  POR_HORA
+}
+
+enum EstadoVisita {
+  LEGADO
+  PENDIENTE_INGRESO
+  DENTRO
+  PAGADO
+  SALIDA_AUTORIZADA
+  FINALIZADO
+  CANCELADA
+}
+
+enum EstadoTicket {
+  PENDIENTE
+  PAGADO
+  CERRADO
+  ANULADO
+}
+
+enum MetodoPago {
+  QR_SIMULADO
+  BILLETERA
+}
+
+enum EstadoPago {
+  PENDIENTE
+  CONFIRMADO
+  RECHAZADO
+  ANULADO
+}
+
+enum TipoMovimientoBilletera {
+  RECARGA
+  PAGO
+  DEVOLUCION
+}
+
+enum ZonaAcceso {
+  ENTRADA
+  SALIDA
+}
+
+enum ResultadoOCR {
+  ACEPTADA
+  DUPLICADA
+  RECHAZADA
+}
+
+enum TipoEventoBarrera {
+  AUTORIZACION
+  APERTURA
+  PASO_CONFIRMADO
+  CIERRE
+  DENEGACION
+  ERROR
+}
+
+enum ResultadoBarrera {
+  AUTORIZADA
+  ABIERTA
+  PASO_CONFIRMADO
+  CERRADA
+  DENEGADA
+  ERROR
+}
+
+model Usuario {
+  id Int @id @default(autoincrement())
+  nombre String @db.VarChar(100)
+  correo String @unique @db.VarChar(150)
+  passwordHash String @db.VarChar(255)
+  telefono String? @db.VarChar(20)
+  rol RolUsuario @default(CLIENTE)
+  activo Boolean @default(true)
+  fechaRegistro DateTime @default(now())
+  vehiculos Vehiculo[]
+  reservas Reserva[]
+  visitas VisitaVehiculo[]
+  billetera Billetera?
+  pagos Pago[]
+  @@map("usuarios")
+}
+
+model Vehiculo {
+  id Int @id @default(autoincrement())
+  usuarioId Int
+  placa String @unique @db.VarChar(12)
+  marca String? @db.VarChar(50)
+  modelo String? @db.VarChar(50)
+  color String? @db.VarChar(30)
+  estadoVerificacion EstadoVerificacionVehiculo @default(PENDIENTE)
+  activo Boolean @default(true)
+  fechaRegistro DateTime @default(now())
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  reservas Reserva[]
+  visitas VisitaVehiculo[]
+  @@index([usuarioId])
+  @@map("vehiculos")
+}
+
+model Tarifa {
+  id Int @id @default(autoincrement())
+  codigo String @unique @db.VarChar(32)
+  nombre String @db.VarChar(100)
+  precioHora Decimal @db.Decimal(10,2)
+  modalidad ModalidadTarifa @default(POR_MINUTO)
+  toleranciaSalidaMin Int @default(10)
+  vigenteDesde DateTime @default(now())
+  vigenteHasta DateTime?
+  activo Boolean @default(true)
+  visitas VisitaVehiculo[]
+  @@index([activo, vigenteDesde])
+  @@map("tarifas")
+}
+
+model Camara {
+  id Int @id @default(autoincrement())
+  codigo String @unique @db.VarChar(32)
+  nombre String @db.VarChar(100)
+  zona ZonaAcceso
+  urlVideo String? @db.VarChar(255)
+  activa Boolean @default(true)
+  ultimaConexion DateTime?
+  visitasIngreso VisitaVehiculo[] @relation("CamaraIngreso")
+  visitasSalida VisitaVehiculo[] @relation("CamaraSalida")
+  lecturas LecturaOCR[]
+  @@map("camaras")
+}
+
+model Reserva {
+  id Int @id @default(autoincrement())
+  codigo String @unique @db.VarChar(64)
+  usuarioId Int
+  vehiculoId Int
+  estacionamientoId Int
+  fechaInicio DateTime
+  fechaFin DateTime
+  estado EstadoReserva @default(PENDIENTE)
+  fechaCreacion DateTime @default(now())
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  vehiculo Vehiculo @relation(fields: [vehiculoId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  estacionamiento Estacionamiento @relation(fields: [estacionamientoId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  visita VisitaVehiculo?
+  @@index([usuarioId])
+  @@index([vehiculoId])
+  @@index([estacionamientoId, fechaInicio, fechaFin])
+  @@index([estado, fechaFin])
+  @@map("reservas")
+}
+
+model Ticket {
+  id Int @id @default(autoincrement())
+  visitaId Int @unique
+  codigo String @unique @db.VarChar(64)
+  tokenAccesoHash String @unique @db.VarChar(64)
+  importeTotal Decimal @default(0) @db.Decimal(10,2)
+  minutosFacturados Int @default(0)
+  fechaEmision DateTime @default(now())
+  fechaLimiteSalida DateTime?
+  estado EstadoTicket @default(PENDIENTE)
+  visita VisitaVehiculo @relation(fields: [visitaId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  pagos Pago[]
+  @@map("tickets")
+}
+
+model Pago {
+  id Int @id @default(autoincrement())
+  ticketId Int
+  usuarioId Int?
+  referencia String @unique @db.VarChar(64)
+  importe Decimal @db.Decimal(10,2)
+  metodo MetodoPago
+  estado EstadoPago @default(PENDIENTE)
+  simulado Boolean @default(true)
+  fechaCreacion DateTime @default(now())
+  fechaConfirmacion DateTime?
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  usuario Usuario? @relation(fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  movimiento MovimientoBilletera?
+  @@index([ticketId, estado])
+  @@index([usuarioId])
+  @@map("pagos")
+}
+
+model Billetera {
+  id Int @id @default(autoincrement())
+  usuarioId Int @unique
+  saldo Decimal @default(0) @db.Decimal(10,2)
+  fechaActualizacion DateTime @updatedAt
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  movimientos MovimientoBilletera[]
+  @@map("billeteras")
+}
+
+model MovimientoBilletera {
+  id Int @id @default(autoincrement())
+  billeteraId Int
+  pagoId Int? @unique
+  referencia String @unique @db.VarChar(64)
+  tipo TipoMovimientoBilletera
+  importe Decimal @db.Decimal(10,2)
+  saldoAnterior Decimal @db.Decimal(10,2)
+  saldoPosterior Decimal @db.Decimal(10,2)
+  fecha DateTime @default(now())
+  billetera Billetera @relation(fields: [billeteraId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  pago Pago? @relation(fields: [pagoId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  @@index([billeteraId, fecha])
+  @@map("movimientos_billetera")
+}
+
+model LecturaOCR {
+  id Int @id @default(autoincrement())
+  eventoId String @unique @db.VarChar(64)
+  camaraId Int
+  visitaId Int?
+  placa String @db.VarChar(12)
+  confirmaciones Int
+  confianza Decimal? @db.Decimal(5,2)
+  resultado ResultadoOCR
+  fechaCaptura DateTime
+  fechaRecepcion DateTime @default(now())
+  camara Camara @relation(fields: [camaraId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  visita VisitaVehiculo? @relation(fields: [visitaId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  @@index([camaraId, fechaCaptura])
+  @@index([visitaId])
+  @@index([placa, fechaCaptura])
+  @@map("lecturas_ocr")
+}
+
+model EventoBarrera {
+  id Int @id @default(autoincrement())
+  eventoId String @unique @db.VarChar(64)
+  comandoId String? @db.VarChar(64)
+  visitaId Int?
+  zona ZonaAcceso
+  tipoEvento TipoEventoBarrera
+  resultado ResultadoBarrera
+  motivo String? @db.VarChar(255)
+  venceEn DateTime?
+  fechaEvento DateTime @default(now())
+  visita VisitaVehiculo? @relation(fields: [visitaId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  @@index([visitaId])
+  @@index([comandoId])
+  @@index([zona, fechaEvento])
+  @@map("eventos_barrera")
 }
