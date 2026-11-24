@@ -9,6 +9,7 @@ import { CamarasModule } from './camaras/camaras.module.js';
 
 import { AuthModule } from './auth/auth.module.js';
 import { UsuariosModule } from './usuarios/usuarios.module.js';
+import { ReservasModule } from './reservas/reservas.module.js';
 import { VehiculosModule } from './vehiculos/vehiculos.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
@@ -29,6 +30,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AuthModule,
     UsuariosModule,
     VehiculosModule,
+    ReservasModule,
   ],
   controllers: [AppController],
   providers: [AppService],

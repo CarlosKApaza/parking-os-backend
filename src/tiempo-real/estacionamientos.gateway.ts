@@ -13,6 +13,11 @@ export class EstacionamientosGateway {
   @WebSocketServer()
   server?: Server;
 
+  publicarReservas(): void {
+    try { this.server?.emit('reservas.actualizadas', { fecha: new Date().toISOString() }); }
+    catch (error) { this.logger.warn('No se pudo difundir disponibilidad: ' + String(error)); }
+  }
+
   publicar(plaza: Estacionamiento): void {
     const lectura = {
       codigo: plaza.codigo,

@@ -32,6 +32,7 @@ model Estacionamiento {
   fechaCreacion DateTime         @default(now())
   fechaCambio   DateTime         @updatedAt
 
+  retencion RetencionPlaza?
   eventos EventoEstacionamiento[]
   reservas Reserva[]
 
@@ -211,6 +212,7 @@ model Usuario {
   rol RolUsuario @default(CLIENTE)
   activo Boolean @default(true)
   fechaRegistro DateTime @default(now())
+  retenciones RetencionPlaza[]
   vehiculos Vehiculo[]
   reservas Reserva[]
   visitas VisitaVehiculo[]
@@ -381,4 +383,16 @@ model EventoBarrera {
   @@index([comandoId])
   @@index([zona, fechaEvento])
   @@map("eventos_barrera")
+}
+
+model RetencionPlaza {
+  estacionamientoId Int @id
+  usuarioId Int
+  token String @unique @db.VarChar(64)
+  venceEn DateTime
+  estacionamiento Estacionamiento @relation(fields: [estacionamientoId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  @@index([usuarioId])
+  @@index([venceEn])
+  @@map("retenciones_plaza")
 }
