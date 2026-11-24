@@ -7,6 +7,10 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { SensoresModule } from './sensores/sensores.module.js';
 import { CamarasModule } from './camaras/camaras.module.js';
 
+import { AuthModule } from './auth/auth.module.js';
+import { UsuariosModule } from './usuarios/usuarios.module.js';
+import { VehiculosModule } from './vehiculos/vehiculos.module.js';
+
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 @Module({
@@ -22,6 +26,9 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     PrismaModule,
     SensoresModule,
     CamarasModule,
+    AuthModule,
+    UsuariosModule,
+    VehiculosModule,
   ],
   controllers: [AppController],
   providers: [AppService],
