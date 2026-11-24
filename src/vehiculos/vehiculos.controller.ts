@@ -10,6 +10,8 @@ export class VehiculosController {
   listar(@Req() request: AuthRequest) { return this.vehiculos.listar(request.usuario.id); }
   @Post()
   registrar(@Req() request: AuthRequest, @Body() body: unknown) { return this.vehiculos.registrar(request.usuario.id,body); }
+  @Post(':id/habilitar-demo')
+  habilitarDemo(@Req() request: AuthRequest, @Param('id',ParseIntPipe) id:number) { return this.vehiculos.habilitarDemo(request.usuario.id,id); }
   @Delete(':id')
   desvincular(@Req() request: AuthRequest, @Param('id',ParseIntPipe) id:number) { return this.vehiculos.desvincular(request.usuario.id,id); }
 }

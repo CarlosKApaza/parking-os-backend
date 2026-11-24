@@ -17,7 +17,7 @@ Quitar las variables de la sesión después. No habilitar en producción.
 Alex alex@parkingos.test 8520PHD Bs150, María maria@parkingos.test 1234ABC Bs100,
 Daniel daniel@parkingos.test 4567XYZ Bs200. Contraseña demo Parking123*.
 Seed no resetea saldo, contraseña ni titularidad si se repite; placas de prueba verificadas.
-No crea admin sin contraseña explícita. Nuevos registros de placa quedan PENDIENTE.
+No crea admin sin contraseña explícita. Nuevos registros de placa quedan PENDIENTE por defecto. En feria local, VEHICULOS_VERIFICACION_AUTOMATICA=1 habilita automáticamente nuevas matrículas válidas y únicas. Para una matrícula previamente pendiente, POST /vehiculos/:id/habilitar-demo con JWT del propietario registrado. No permite habilitar matrículas rechazadas ni ajenas. No acredita propiedad real; deshabilitado en NODE_ENV=production. El OCR integrado al flujo de acceso aún está pendiente.
 
 ## Postman, http://127.0.0.1:3000
 POST /auth/registro {"nombre":"Eva","correo":"eva@parkingos.test","password":"Parking123*"}
@@ -29,5 +29,5 @@ POST /vehiculos {"placa":"9999ABC","marca":"Demo"} — Bearer
 DELETE /vehiculos/:id — Bearer (baja lógica, historial preservado y no reasignable por el cliente).
 Probar dos tokens: cada cuenta solo lista sus propios vehículos; intentar borrar vehículo ajeno -> 404.
 Sin token o token inválido -> 401. Correo/placa duplicado -> 409.
-No hay autenticación privada de WebSocket, pagos, reservas ni frontend integrados todavía.
+Reservas concurrentes y frontend de autenticación ya integrados; pagos y autenticación privada de WebSocket pendientes.
 Futuras operaciones de reserva/visita deben coordinar el bloqueo de vehículo y plaza.
