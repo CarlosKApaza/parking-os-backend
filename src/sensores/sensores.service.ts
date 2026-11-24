@@ -6,10 +6,14 @@ import {
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service.js';
+import { EstacionamientosGateway } from '../tiempo-real/estacionamientos.gateway.js';
 
 @Injectable()
 export class SensoresService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gateway: EstacionamientosGateway,
+  ) {}
 
   // Procesar una lectura simulada del sensor
   async registrarLectura(sensorCodigo: string, ocupado: boolean) {
@@ -28,7 +32,7 @@ export class SensoresService {
     const fechaLectura = new Date();
 
     // 2. Ejecutar operaciones en una transaccion
-    return this.prisma.$transaction(async (tx) => {
+    const { resultado, actualizado } = await this.prisma.$transaction(async (tx) => {
 
       // Buscar el estacionamiento por codigo de sensor
       const estacionamiento = await tx.estacionamiento.findUnique({
@@ -70,12 +74,20 @@ export class SensoresService {
 
       // 6. Devolver resultado
       return {
-        mensaje: 'Lectura procesada correctamente',
-        estacionamiento: actualizado.codigo,
-        sensor: codigo,
-        estado: actualizado.estado,
-        cambioRegistrado: huboCambio,
+        actualizado,
+        resultado: {
+          mensaje: 'Lectura procesada correctamente',
+          estacionamiento: actualizado.codigo,
+          sensor: codigo,
+          estado: actualizado.estado,
+          cambioRegistrado: huboCambio,
+        },
       };
     });
+
+    // Publicar DESPUÉS del commit, incluso si fue un reporte sin cambio.
+    // Nunca emitir un estado cuya escritura en MySQL haya fallado.
+    this.gateway.publicar(actualizado);
+    return resultado;
   }
 }
