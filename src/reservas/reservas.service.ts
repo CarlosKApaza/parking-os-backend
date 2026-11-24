@@ -63,7 +63,12 @@ export class ReservasService implements OnModuleInit, OnModuleDestroy {
     this.gateway.publicarReservas();return result;
   }
   async liberar(usuarioId:number,token:string){
-    const result=await this.prisma.retencionPlaza.deleteMany({where:{usuarioId,token}});
+    const result=await this.tx(async tx=>{
+      const hold=await tx.retencionPlaza.findUnique({where:{token},include:{estacionamiento:{select:{codigo:true}}}});
+      if(!hold||hold.usuarioId!==usuarioId)return {count:0};
+      await this.lock(tx,hold.estacionamiento.codigo);
+      return tx.retencionPlaza.deleteMany({where:{usuarioId,token}});
+    });
     if(result.count)this.gateway.publicarReservas();
     return {liberada:!!result.count};
   }
@@ -84,7 +89,7 @@ export class ReservasService implements OnModuleInit, OnModuleDestroy {
       horario(data.fechaInicio,data.fechaFin,now);
       const conflict=await tx.reserva.findFirst({where:{estado:{in:active},fechaInicio:{lt:fechaFin},fechaFin:{gt:fechaInicio},OR:[{estacionamientoId:p.id},{vehiculoId}]}});
       if(conflict)throw new ConflictException('La plaza o el vehículo ya tienen una reserva en ese horario.');
-      const reserva=await tx.reserva.create({data:{codigo:'RS-'+randomUUID(),usuarioId,vehiculoId,estacionamientoId:p.id,fechaInicio,fechaFin,estado:'CONFIRMADA'},include});
+      const reserva=await tx.reserva.create({data:{codigo:'RS-'+randomUUID().replace(/-/g,'').slice(0,16).toUpperCase(),usuarioId,vehiculoId,estacionamientoId:p.id,fechaInicio,fechaFin,estado:'CONFIRMADA'},include});
       await tx.retencionPlaza.delete({where:{estacionamientoId:p.id}});
       return reserva;
     });

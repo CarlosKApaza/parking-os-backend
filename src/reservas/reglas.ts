@@ -5,6 +5,8 @@ export function horario(inicio:unknown,fin:unknown,now=new Date()){
   const parse=(v:unknown)=>{if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(v))throw new BadRequestException('Fecha ISO con zona horaria requerida.');const d=new Date(v);if(!Number.isFinite(+d))throw new BadRequestException('Fecha inválida.');return d};
   const a=parse(inicio),b=parse(fin);
   if(+a<=+now||+b<=+a||+b-+a>24*3600000||+a-+now>30*86400000)throw new BadRequestException('El horario debe ser futuro, de hasta 24 horas y dentro de 30 días.');
+  const day=(d:Date)=>new Date(+d-4*3600000).toISOString().slice(0,10);
+  if(day(a)!==day(b))throw new BadRequestException('Por ahora la reserva debe comenzar y terminar el mismo día (hora de Bolivia).');
   return {fechaInicio:a,fechaFin:b};
 }
 export function solapa(a:Date,b:Date,c:Date,d:Date){return a<d&&b>c}
