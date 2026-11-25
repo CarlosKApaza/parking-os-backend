@@ -30,6 +30,11 @@ describe('SensoresService: difusión tras confirmar MySQL', () => {
     expect(tx.eventoEstacionamiento.create).toHaveBeenCalledTimes(1);
     expect(publicar).toHaveBeenCalledWith(actualizado);
   });
+  it('registra el origen fisico del ESP32', async () => {
+    const { service, tx } = setup('LIBRE');
+    await service.registrarLectura('IR01', true, 'SENSOR_IR');
+    expect(tx.eventoEstacionamiento.create).toHaveBeenCalledWith({ data: expect.objectContaining({ origen: 'SENSOR_IR' }) });
+  });
   it('publica también reportes sin cambio de ocupación', async () => {
     const { service, tx, publicar } = setup('OCUPADO');
     expect((await service.registrarLectura('IR01', true)).cambioRegistrado).toBe(false);

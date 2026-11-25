@@ -15,8 +15,8 @@ export class SensoresService {
     private readonly gateway: EstacionamientosGateway,
   ) {}
 
-  // Procesar una lectura simulada del sensor
-  async registrarLectura(sensorCodigo: string, ocupado: boolean) {
+  // Procesar una lectura fisica o simulada del sensor
+  async registrarLectura(sensorCodigo: string, ocupado: boolean, origen: 'SIMULACION' | 'SENSOR_IR' = 'SIMULACION') {
 
     // 1. Validar los datos recibidos
     if (
@@ -66,7 +66,7 @@ export class SensoresService {
             estacionamientoId: estacionamiento.id,
             estadoAnterior: estacionamiento.estado,
             estadoNuevo: estadoNuevo,
-            origen: 'SIMULACION',
+            origen,
             fechaEvento: fechaLectura,
           },
         });
