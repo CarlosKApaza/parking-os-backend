@@ -41,8 +41,8 @@ export class GaritasService {
   private salidaPendiente?: {id:string;visitaId:number;placa:string;token?:string;hasta?:number};
   private salidaSinIR=false;
   private entradaSinIR=false;
-  // Ultima placa aceptada por garita: no rearma si sigue visible.
-  private readonly ultimaPlacaOCR: Partial<Record<Zona,string>>={};
+  // Breve pausa al completar salida, no un bloqueo permanente de matricula.
+  private readonly reingresoDesde=new Map<string,number>();
   private salidaFase: Fase='LIBRE';
   private salidaFinal?: {placa:string;hasta:number};
   private readonly presentes: Partial<Record<Zona,Presencia>>={};
@@ -102,7 +102,7 @@ export class GaritasService {
         if(fase==='LIBRE')continue;
         let auth=await this.prisma.eventoBarrera.findUnique({where:{eventoId:this.authId(z,id)}});
         if(fase==='PRESENCIA'){
-          if(z==='ENTRADA'&&this.entradaSinIR&&auth?.venceEn&&+auth.venceEn<=Date.now()){
+          if((z==='ENTRADA'?this.entradaSinIR:this.salidaSinIR)&&auth?.venceEn&&+auth.venceEn<=Date.now()){
             reply.push(z+':CANCELAR:'+id);continue;
           }
           // Reutiliza exclusivamente la placa confirmada para este mismo ciclo IR.
@@ -161,7 +161,9 @@ export class GaritasService {
           });
           this.gateway.publicarReservas();
         }
-        if(fase==='CANCELADA'&&(z==='ENTRADA'?this.entradaSinIR:this.salidaSinIR))delete this.ultimaPlacaOCR[z];
+        if(z==='SALIDA'&&fase==='PASO'&&this.salidaPendiente?.id===id&&auth?.visitaId){
+          this.reingresoDesde.set(this.salidaPendiente.placa,Date.now()+3000);
+        }
         if(z==='SALIDA'&&this.salidaPendiente?.id===id){
           if(fase==='PASO'&&auth?.visitaId)this.salidaFinal={placa:this.salidaPendiente.placa,hasta:Date.now()+5000};
           this.salidaPendiente=undefined;
@@ -184,14 +186,33 @@ export class GaritasService {
         if(previo.visita?.placa!==placa)return this.negar('Garita ya asociada a otro vehiculo');
         return {registrado:false,autorizado:!!previo.venceEn&&+previo.venceEn>Date.now(),motivo:'Autorizacion ya emitida',visita:previo.visita};
       }
-      if(sinIR&&this.ultimaPlacaOCR[zona]===placa&&!(zona==='SALIDA'&&this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa===placa))return this.negar('Placa repetida; espera otro vehiculo');
+      if(zona==='ENTRADA'&&sinIR&&(this.reingresoDesde.get(placa)??0)>Date.now())return this.negar('Salida recien completada; presenta la placa de nuevo en unos segundos');
       const result=await this.tx(async tx=>{
         const ahora=new Date();
-        const activa=await tx.visitaVehiculo.findUnique({where:{placaActiva:placa}});
+        let activa=await tx.visitaVehiculo.findUnique({where:{placaActiva:placa}});
         let visitaId:number;
         let motivo:string;
         if(zona==='ENTRADA'){
-          if(activa)return this.negar('Vehiculo ya tiene visita abierta o pendiente');
+          // Recuperar un ciclo de maqueta interrumpido DESPUES de una apertura pagada.
+          // No liberar una deuda ni interpretar un pago por si solo como salida.
+          if(sinIR&&activa&&['PAGADO','SALIDA_AUTORIZADA'].includes(activa.estado)){
+            const anterior=await tx.eventoBarrera.findFirst({where:{visitaId:activa.id,zona:'SALIDA',tipoEvento:'APERTURA',resultado:'ABIERTA'},orderBy:{id:'desc'}});
+            const t=await tx.ticket.findUnique({where:{visitaId:activa.id}});
+            if(anterior&&t?.estado==='PAGADO'&&this.salidaPendiente?.visitaId!==activa.id&&this.salidaFase!=='ABIERTA'){
+              // El OCR de entrada es una nueva observacion, con apertura de salida previa registrada.
+              await tx.visitaVehiculo.update({where:{id:activa.id},data:{estado:'FINALIZADO',fechaSalida:ahora,placaActiva:null,camaraSalida:'CAM-SALIDA'}});
+              if(activa.reservaId)await tx.reserva.updateMany({where:{id:activa.reservaId,estado:'EN_USO'},data:{estado:'FINALIZADA'}});
+              await tx.ticket.update({where:{id:t.id},data:{estado:'CERRADO'}});
+              activa=null;
+            }
+          }
+          // Una autorizacion anterior sin paso confirmado puede reintentarse con la misma visita.
+          if(activa&&sinIR&&activa.estado==='PENDIENTE_INGRESO'){
+            const venceEn=new Date(Date.now()+AUTORIZACION_MS);
+            await tx.eventoBarrera.create({data:{eventoId,comandoId:p.id,visitaId:activa.id,zona,tipoEvento:'AUTORIZACION',resultado:'AUTORIZADA',motivo:'Reintento de ingreso pendiente',venceEn}});
+            return {registrado:true,autorizado:true,evento:'AUTORIZACION_ENTRADA',visitaId:activa.id,venceEn,motivo:'Reintento de ingreso pendiente'};
+          }
+          if(activa)return this.negar('Vehiculo ya tiene visita activa sin salida confirmada; presenta la placa en salida');
           // Bloqueos en el mismo orden que las reservas: vehiculo y plazas.
           await tx.$queryRaw`SELECT id FROM vehiculos WHERE placa = ${placa} FOR UPDATE`;
           await tx.$queryRaw`SELECT id FROM estacionamientos ORDER BY id FOR UPDATE`;
@@ -203,7 +224,7 @@ export class GaritasService {
           const libres=plazas.filter(s=>s.estado==='LIBRE');
           const ocupadas=plazas.filter(s=>s.estado==='OCUPADO').length;
           const abiertas=await tx.visitaVehiculo.count({where:{placaActiva:{not:null},estado:{in:['PENDIENTE_INGRESO','DENTRO','PAGADO','SALIDA_AUTORIZADA']}}});
-          if(Math.max(abiertas,ocupadas)>=plazas.filter(s=>s.estado!=='DESCONOCIDO').length)return this.negar('Sin capacidad confirmada');
+          if(!sinIR&&Math.max(abiertas,ocupadas)>=plazas.filter(s=>s.estado!=='DESCONOCIDO').length)return this.negar('Sin capacidad confirmada');
           if(propia){
             if(!libres.some(s=>s.id===propia.estacionamientoId))return this.negar('Plaza reservada no disponible fisicamente');
             if(await tx.visitaVehiculo.findUnique({where:{reservaId:propia.id}}))return this.negar('Reserva ya vinculada a una visita');
@@ -219,18 +240,26 @@ export class GaritasService {
           }});
           visitaId=visita.id;motivo=propia?'Reserva vigente':vehiculo?'Cliente registrado':'Invitado';
         }else{
+          // En maqueta, una lectura de salida permite recuperar un ingreso pendiente
+          // de pruebas anteriores; sigue siendo obligatorio cobrar la visita.
+          if(sinIR&&activa?.estado==='PENDIENTE_INGRESO'){
+            const ingreso=activa;
+            activa=await tx.visitaVehiculo.update({where:{id:ingreso.id},data:{estado:'DENTRO',fechaIngresoConfirmada:ingreso.fechaIngreso}});
+            if(ingreso.reservaId)await tx.reserva.updateMany({where:{id:ingreso.reservaId,estado:'CONFIRMADA'},data:{estado:'EN_USO'}});
+          }
           if(!activa||!['DENTRO','PAGADO','SALIDA_AUTORIZADA'].includes(activa.estado))return this.negar('No existe ingreso confirmado para esta placa');
-          if(this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa!==placa)return this.negar('Garita ya asociada a otro vehiculo; completa o espera que expire el ciclo');
+          if(!sinIR&&this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa!==placa)return this.negar('Garita ya asociada a otro vehiculo; completa o espera que expire el ciclo');
           const ticket=await tx.ticket.findUnique({where:{visitaId:activa.id}});
           const pagado=!!(ticket?.estado==='PAGADO'&&ticket.fechaLimiteSalida&&ticket.fechaLimiteSalida>=ahora);
           const sinCobro=salidaDemo()&&!this.salidaSinIR;
-          let token=this.salidaPendiente?.id===p.id?this.salidaPendiente.token:undefined;
+          const mismoTurno=this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa===placa;
+          let token=mismoTurno?this.salidaPendiente?.token:undefined;
           if(!pagado&&!sinCobro&&(activa.usuarioId===null||this.salidaSinIR)&&!token){
             token=randomBytes(24).toString('hex');
             const tokenAccesoHash=createHash('sha256').update(token).digest('hex');
             await tx.ticket.upsert({where:{visitaId:activa.id},create:{visitaId:activa.id,codigo:randomBytes(24).toString('hex'),tokenAccesoHash},update:{tokenAccesoHash}});
           }
-          this.salidaPendiente={id:p.id,visitaId:activa.id,placa,token,hasta:this.salidaSinIR?(this.salidaPendiente?.id===p.id?this.salidaPendiente.hasta:Date.now()+5*60000):undefined};
+          this.salidaPendiente={id:p.id,visitaId:activa.id,placa,token,hasta:this.salidaSinIR?(mismoTurno?this.salidaPendiente?.hasta:Date.now()+5*60000):undefined};
           this.salidaFinal=undefined;
           if(!pagado&&!sinCobro)return this.negar('Pago pendiente; barrera cerrada');
           visitaId=activa.id;motivo=pagado?'Pago confirmado':'SALIDA_DEMO_SIN_COBRO';
@@ -239,7 +268,7 @@ export class GaritasService {
         await tx.eventoBarrera.create({data:{eventoId,comandoId:p.id,visitaId,zona,tipoEvento:'AUTORIZACION',resultado:'AUTORIZADA',motivo,venceEn}});
         return {registrado:true,autorizado:true,evento:'AUTORIZACION_'+zona,visitaId,venceEn,motivo};
       });
-      if(sinIR&&(result.autorizado||(zona==='SALIDA'&&this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa===placa)))this.ultimaPlacaOCR[zona]=placa;
+      if(result.autorizado)this.gateway.publicarReservas();
       return result;
     });
   }
