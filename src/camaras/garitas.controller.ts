@@ -1,16 +1,16 @@
 import { Body, Controller, Get, Header, Headers, Post, ServiceUnavailableException } from '@nestjs/common';
 import { origenLectura } from '../sensores/sensores.controller.js';
-import { CamarasService } from './camaras.service.js';
 import { GaritasService, modoGaritas } from './garitas.service.js';
 
 @Controller('garitas')
 export class GaritasController {
-  constructor(private readonly garitas: GaritasService,private readonly camaras:CamarasService) {}
+  constructor(private readonly garitas: GaritasService) {}
 
   @Get('terminal-salida')
   @Header('Cache-Control','no-store')
-  terminal(@Headers('x-camera-key') clave:string|undefined){
-    this.camaras.autorizar(clave);
+  terminal(){
+    // Pantalla pública de la feria: consulta únicamente el vehículo de salida.
+    if(process.env.PAGOS_SIMULADOS!=='1'||process.env.NODE_ENV==='production')throw new ServiceUnavailableException('Terminal publica disponible solo en modo feria');
     return this.garitas.terminalSalida();
   }
 
