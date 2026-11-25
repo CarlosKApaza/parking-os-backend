@@ -1,6 +1,8 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ESTADOS_ACTIVOS } from '../reservas/reglas.js';
+import { calcularDisponibilidad } from './disponibilidad.js';
 
 @Injectable()
 export class EstacionamientosService {
@@ -13,6 +15,31 @@ export class EstacionamientosService {
         id: 'asc',
       },
     });
+  }
+
+  // Consolidar ocupacion fisica, reservas y retenciones sin modificar sus estados.
+  async obtenerDisponibilidad() {
+    const ahora = new Date();
+    const plazas = await this.prisma.estacionamiento.findMany({
+      orderBy: { id: 'asc' },
+      select: {
+        id: true, codigo: true, sensorCodigo: true,
+        activo: true, estado: true, ultimaLectura: true,
+        reservas: {
+          where: { estado: { in: [...ESTADOS_ACTIVOS] }, fechaFin: { gt: ahora } },
+          orderBy: { fechaInicio: 'asc' },
+          select: { estado: true, fechaInicio: true, fechaFin: true },
+        },
+        retencion: { select: { venceEn: true } },
+      },
+    });
+    const permitirLecturaAntigua =
+      process.env.RESERVAS_PERMITIR_LECTURA_ANTIGUA === '1' &&
+      process.env.NODE_ENV !== 'production';
+    return {
+      servidorAhora: ahora,
+      plazas: plazas.map(p => calcularDisponibilidad(p, ahora, permitirLecturaAntigua)),
+    };
   }
 
   // Obtener resumen de disponibilidad

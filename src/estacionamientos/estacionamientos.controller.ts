@@ -14,6 +14,12 @@ export class EstacionamientosController {
     return this.estacionamientosService.listarTodos();
   }
 
+  // Disponibilidad consolidada; no expone datos privados de usuarios.
+  @Get('disponibilidad')
+  async obtenerDisponibilidad() {
+    return this.estacionamientosService.obtenerDisponibilidad();
+  }
+
   // Obtener resumen de disponibilidad
   @Get('resumen')
   async obtenerResumen() {
