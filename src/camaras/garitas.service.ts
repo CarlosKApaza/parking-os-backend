@@ -94,6 +94,7 @@ export class GaritasService {
                 if(changed.count){
                   const v=await tx.visitaVehiculo.findUniqueOrThrow({where:{id:visitaId}});
                   if(v.reservaId)await tx.reserva.updateMany({where:{id:v.reservaId,estado:'EN_USO'},data:{estado:'FINALIZADA'}});
+                  await tx.ticket.updateMany({where:{visitaId,estado:'PAGADO'},data:{estado:'CERRADO'}});
                 }
               }
               await tx.eventoBarrera.create({data:{eventoId,comandoId:id,visitaId,zona:z,tipoEvento:'PASO_CONFIRMADO',resultado:'PASO_CONFIRMADO',motivo:'Paso inferido por IR y cierre local'}});
@@ -156,7 +157,8 @@ export class GaritasService {
           visitaId=visita.id;motivo=propia?'Reserva vigente':vehiculo?'Cliente registrado':'Invitado';
         }else{
           if(!activa||!['DENTRO','PAGADO','SALIDA_AUTORIZADA'].includes(activa.estado))return this.negar('No existe ingreso confirmado para esta placa');
-          const pagado=activa.estado==='PAGADO'||activa.estado==='SALIDA_AUTORIZADA';
+          const ticket=await tx.ticket.findUnique({where:{visitaId:activa.id}});
+          const pagado=!!(ticket?.estado==='PAGADO'&&ticket.fechaLimiteSalida&&ticket.fechaLimiteSalida>=ahora);
           if(!pagado&&!salidaDemo())return this.negar('Pago pendiente; barrera cerrada');
           visitaId=activa.id;motivo=pagado?'Pago confirmado':'SALIDA_DEMO_SIN_COBRO';
         }

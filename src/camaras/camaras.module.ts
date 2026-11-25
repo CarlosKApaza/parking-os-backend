@@ -10,5 +10,6 @@ import { CamarasService } from './camaras.service.js';
   imports: [PrismaModule, TiempoRealModule],
   controllers: [CamarasController, GaritasController],
   providers: [CamarasService, GaritasService],
+  exports: [CamarasService],
 })
 export class CamarasModule {}

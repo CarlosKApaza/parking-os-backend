@@ -12,6 +12,8 @@ import { UsuariosModule } from './usuarios/usuarios.module.js';
 import { ReservasModule } from './reservas/reservas.module.js';
 import { VehiculosModule } from './vehiculos/vehiculos.module.js';
 
+import { PagosModule } from './pagos/pagos.module.js';
+
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 @Module({
@@ -31,6 +33,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     UsuariosModule,
     VehiculosModule,
     ReservasModule,
+    PagosModule,
   ],
   controllers: [AppController],
   providers: [AppService],
