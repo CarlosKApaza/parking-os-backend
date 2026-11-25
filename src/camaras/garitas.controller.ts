@@ -1,10 +1,18 @@
-import { Body, Controller, Header, Headers, Post, ServiceUnavailableException } from '@nestjs/common';
+import { Body, Controller, Get, Header, Headers, Post, ServiceUnavailableException } from '@nestjs/common';
 import { origenLectura } from '../sensores/sensores.controller.js';
+import { CamarasService } from './camaras.service.js';
 import { GaritasService, modoGaritas } from './garitas.service.js';
 
 @Controller('garitas')
 export class GaritasController {
-  constructor(private readonly garitas: GaritasService) {}
+  constructor(private readonly garitas: GaritasService,private readonly camaras:CamarasService) {}
+
+  @Get('terminal-salida')
+  @Header('Cache-Control','no-store')
+  terminal(@Headers('x-camera-key') clave:string|undefined){
+    this.camaras.autorizar(clave);
+    return this.garitas.terminalSalida();
+  }
 
   @Post('sincronizar')
   @Header('Content-Type', 'text/plain; charset=utf-8')

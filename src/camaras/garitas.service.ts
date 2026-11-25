@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { createHash, randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EstacionamientosGateway } from '../tiempo-real/estacionamientos.gateway.js';
@@ -37,6 +38,9 @@ export function leerOCR(v:unknown) {
 
 @Injectable()
 export class GaritasService {
+  private salidaPendiente?: {id:string;visitaId:number;placa:string;token?:string};
+  private salidaFase: Fase='LIBRE';
+  private salidaFinal?: {placa:string;hasta:number};
   private readonly presentes: Partial<Record<Zona,Presencia>>={};
   // Una sola instancia NestJS para la maqueta. Serializa OCR y sincronizaciones.
   private cola: Promise<unknown>=Promise.resolve();
@@ -51,6 +55,27 @@ export class GaritasService {
   }
   private negar(motivo:string){return {registrado:false,autorizado:false,motivo};}
   private authId(z:Zona,id:string){return z+'-'+id+'-AUTH';}
+  async terminalSalida(){
+    return this.serial(async()=>{
+      const p=this.salidaPendiente;
+      if(!p)return this.salidaFinal&&this.salidaFinal.hasta>Date.now()
+        ?{estado:'FINALIZADO',placa:this.salidaFinal.placa}:{estado:'ESPERA'};
+      if(this.salidaFase==='PRESENCIA'&&(!this.presentes.SALIDA||this.presentes.SALIDA.hasta<=Date.now()))return {estado:'ESPERA'};
+      const v=await this.prisma.visitaVehiculo.findUnique({where:{id:p.visitaId},include:{ticket:{include:{pagos:true}}}});
+      if(!v)return {estado:'ESPERA'};
+      const t=v.ticket, ahora=new Date();
+      const minutos=Math.max(1,Math.ceil((+ahora-+(v.fechaIngresoConfirmada??v.fechaIngreso))/60000));
+      const precio=v.precioHoraAplicado??new Prisma.Decimal(15);
+      const total=(v.modalidadAplicada==='POR_HORA'?precio.mul(Math.ceil(minutos/60)):precio.mul(minutos).div(60)).toDecimalPlaces(2);
+      const abonado=(t?.pagos??[]).filter(x=>x.estado==='CONFIRMADO').reduce((sum,x)=>sum.add(x.importe),new Prisma.Decimal(0));
+      const pagado=!!(t?.estado==='PAGADO'&&t.fechaLimiteSalida&&t.fechaLimiteSalida>=ahora);
+      const auth=await this.prisma.eventoBarrera.findUnique({where:{eventoId:this.authId('SALIDA',p.id)}});
+      const autorizado=!!(auth?.venceEn&&auth.venceEn>ahora&&auth.resultado==='AUTORIZADA');
+      return {estado:this.salidaFase==='ABIERTA'?'ABIERTA':v.estado==='FINALIZADO'?'FINALIZADO':autorizado?'AUTORIZADA':pagado?'PAGADO':'PENDIENTE',
+        placa:v.placa,visitaId:v.id,invitado:v.usuarioId===null,minutos,precioHora:Number(precio),total:Number(pagado?t!.importeTotal:total),pendiente:pagado?0:Number(Prisma.Decimal.max(0,total.sub(abonado))),
+        ruta:!pagado&&p.token?'/pago-invitado?token='+p.token:null};
+    });
+  }
   async sincronizar(body:unknown){
     const o=objeto(body), entradas=zonas.map(z=>({z,...leerEstado(o[z])}));
     return this.serial(async()=>{
@@ -59,9 +84,23 @@ export class GaritasService {
         const {z,id,fase}=e;
         if(fase==='PRESENCIA')this.presentes[z]={id,hasta:Date.now()+PRESENCIA_MS};
         else delete this.presentes[z];
+        if(z==='SALIDA'){
+          this.salidaFase=fase;
+          if(this.salidaPendiente&&this.salidaPendiente.id!==id)this.salidaPendiente=undefined;
+        }
         if(fase==='LIBRE')continue;
-        const auth=await this.prisma.eventoBarrera.findUnique({where:{eventoId:this.authId(z,id)}});
+        let auth=await this.prisma.eventoBarrera.findUnique({where:{eventoId:this.authId(z,id)}});
         if(fase==='PRESENCIA'){
+          // Reutiliza exclusivamente la placa confirmada para este mismo ciclo IR.
+          // El pago no abre si se retira el vehículo o cambia el identificador.
+          const pendiente=z==='SALIDA'?this.salidaPendiente:undefined;
+          if(!auth&&pendiente?.id===id){
+            const v=await this.prisma.visitaVehiculo.findUnique({where:{id:pendiente.visitaId},include:{ticket:true}});
+            const t=v?.ticket;
+            if(v&&v.placaActiva===pendiente.placa&&['PAGADO','SALIDA_AUTORIZADA'].includes(v.estado)&&t?.estado==='PAGADO'&&t.fechaLimiteSalida&&+t.fechaLimiteSalida>Date.now()){
+              auth=await this.prisma.eventoBarrera.create({data:{eventoId:this.authId(z,id),comandoId:id,visitaId:v.id,zona:z,tipoEvento:'AUTORIZACION',resultado:'AUTORIZADA',motivo:'Pago confirmado',venceEn:new Date(Date.now()+AUTORIZACION_MS)}});
+            }
+          }
           if(auth?.resultado==='AUTORIZADA'&&auth.venceEn&&+auth.venceEn>Date.now()&&auth.visitaId){
             const fin=await this.prisma.eventoBarrera.findUnique({where:{eventoId:z+'-'+id+'-FIN'}});
             if(!fin)reply.push(z+':ABRIR:'+id);
@@ -104,6 +143,10 @@ export class GaritasService {
             }
           });
           this.gateway.publicarReservas();
+        }
+        if(z==='SALIDA'&&this.salidaPendiente?.id===id){
+          if(fase==='PASO'&&auth?.visitaId)this.salidaFinal={placa:this.salidaPendiente.placa,hasta:Date.now()+5000};
+          this.salidaPendiente=undefined;
         }
         // ACK aun si no hubo OCR; idempotente y permite nuevo vehiculo.
         reply.push(z+':ACK:'+id);
@@ -157,8 +200,17 @@ export class GaritasService {
           visitaId=visita.id;motivo=propia?'Reserva vigente':vehiculo?'Cliente registrado':'Invitado';
         }else{
           if(!activa||!['DENTRO','PAGADO','SALIDA_AUTORIZADA'].includes(activa.estado))return this.negar('No existe ingreso confirmado para esta placa');
+          if(this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa!==placa)return this.negar('Garita ya asociada a otro vehiculo; libera el IR antes de cambiar');
           const ticket=await tx.ticket.findUnique({where:{visitaId:activa.id}});
           const pagado=!!(ticket?.estado==='PAGADO'&&ticket.fechaLimiteSalida&&ticket.fechaLimiteSalida>=ahora);
+          let token=this.salidaPendiente?.id===p.id?this.salidaPendiente.token:undefined;
+          if(!pagado&&!salidaDemo()&&activa.usuarioId===null&&!token){
+            token=randomBytes(24).toString('hex');
+            const tokenAccesoHash=createHash('sha256').update(token).digest('hex');
+            await tx.ticket.upsert({where:{visitaId:activa.id},create:{visitaId:activa.id,codigo:randomBytes(24).toString('hex'),tokenAccesoHash},update:{tokenAccesoHash}});
+          }
+          this.salidaPendiente={id:p.id,visitaId:activa.id,placa,token};
+          this.salidaFinal=undefined;
           if(!pagado&&!salidaDemo())return this.negar('Pago pendiente; barrera cerrada');
           visitaId=activa.id;motivo=pagado?'Pago confirmado':'SALIDA_DEMO_SIN_COBRO';
         }
