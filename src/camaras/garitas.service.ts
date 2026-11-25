@@ -40,6 +40,9 @@ export function leerOCR(v:unknown) {
 export class GaritasService {
   private salidaPendiente?: {id:string;visitaId:number;placa:string;token?:string;hasta?:number};
   private salidaSinIR=false;
+  private entradaSinIR=false;
+  // Ultima placa aceptada por garita: no rearma si sigue visible.
+  private readonly ultimaPlacaOCR: Partial<Record<Zona,string>>={};
   private salidaFase: Fase='LIBRE';
   private salidaFinal?: {placa:string;hasta:number};
   private readonly presentes: Partial<Record<Zona,Presencia>>={};
@@ -85,9 +88,11 @@ export class GaritasService {
       const solicitaSinIR=o.salidaSinIR===true;
       const permiteSinIR=process.env.PAGOS_SIMULADOS==='1'&&process.env.NODE_ENV!=='production';
       this.salidaSinIR=solicitaSinIR&&permiteSinIR;
+      const solicitaEntradaSinIR=o.entradaSinIR===true;
+      this.entradaSinIR=solicitaEntradaSinIR&&permiteSinIR;
       for(const e of entradas){
         const {z,id,fase}=e;
-        if(z==='SALIDA'&&solicitaSinIR&&!permiteSinIR){delete this.presentes.SALIDA;continue;}
+        if(!permiteSinIR&&((z==='SALIDA'&&solicitaSinIR)||(z==='ENTRADA'&&solicitaEntradaSinIR))){delete this.presentes[z];continue;}
         if(fase==='PRESENCIA')this.presentes[z]={id,hasta:Date.now()+PRESENCIA_MS};
         else delete this.presentes[z];
         if(z==='SALIDA'){
@@ -97,6 +102,9 @@ export class GaritasService {
         if(fase==='LIBRE')continue;
         let auth=await this.prisma.eventoBarrera.findUnique({where:{eventoId:this.authId(z,id)}});
         if(fase==='PRESENCIA'){
+          if(z==='ENTRADA'&&this.entradaSinIR&&auth?.venceEn&&+auth.venceEn<=Date.now()){
+            reply.push(z+':CANCELAR:'+id);continue;
+          }
           // Reutiliza exclusivamente la placa confirmada para este mismo ciclo IR.
           // El pago no abre si se retira el vehículo o cambia el identificador.
           const pendiente=z==='SALIDA'?this.salidaPendiente:undefined;
@@ -145,14 +153,15 @@ export class GaritasService {
                   await tx.ticket.updateMany({where:{visitaId,estado:'PAGADO'},data:{estado:'CERRADO'}});
                 }
               }
-              await tx.eventoBarrera.create({data:{eventoId,comandoId:id,visitaId,zona:z,tipoEvento:'PASO_CONFIRMADO',resultado:'PASO_CONFIRMADO',motivo:z==='SALIDA'&&this.salidaSinIR?'Salida de maqueta inferida por cierre temporizado, sin IR':'Paso inferido por IR y cierre local'}});
+              await tx.eventoBarrera.create({data:{eventoId,comandoId:id,visitaId,zona:z,tipoEvento:'PASO_CONFIRMADO',resultado:'PASO_CONFIRMADO',motivo:(z==='SALIDA'?this.salidaSinIR:this.entradaSinIR)?'Paso de maqueta inferido por cierre temporizado, sin IR':'Paso inferido por IR y cierre local'}});
             }else{
               if(z==='ENTRADA')await tx.visitaVehiculo.updateMany({where:{id:visitaId,estado:'PENDIENTE_INGRESO'},data:{estado:'CANCELADA',placaActiva:null,reservaId:null}});
-              await tx.eventoBarrera.create({data:{eventoId,comandoId:id,visitaId,zona:z,tipoEvento:'DENEGACION',resultado:'DENEGADA',motivo:z==='SALIDA'&&this.salidaSinIR?'Ciclo OCR cancelado sin apertura':'Presencia retirada sin apertura'}});
+              await tx.eventoBarrera.create({data:{eventoId,comandoId:id,visitaId,zona:z,tipoEvento:'DENEGACION',resultado:'DENEGADA',motivo:(z==='SALIDA'?this.salidaSinIR:this.entradaSinIR)?'Ciclo OCR cancelado sin apertura':'Presencia retirada sin apertura'}});
             }
           });
           this.gateway.publicarReservas();
         }
+        if(fase==='CANCELADA'&&(z==='ENTRADA'?this.entradaSinIR:this.salidaSinIR))delete this.ultimaPlacaOCR[z];
         if(z==='SALIDA'&&this.salidaPendiente?.id===id){
           if(fase==='PASO'&&auth?.visitaId)this.salidaFinal={placa:this.salidaPendiente.placa,hasta:Date.now()+5000};
           this.salidaPendiente=undefined;
@@ -166,14 +175,16 @@ export class GaritasService {
   async reconocer(body:unknown){
     const {placa,zona,camara}=leerOCR(body);
     return this.serial(async()=>{
+      const sinIR=zona==='ENTRADA'?this.entradaSinIR:this.salidaSinIR;
       const p=this.presentes[zona];
-      if(!p||p.hasta<=Date.now())return this.negar(zona==='SALIDA'&&this.salidaSinIR?'Terminal de salida no disponible; vuelve a presentar la placa':'Sin presencia IR reciente; vuelve a presentar la placa');
+      if(!p||p.hasta<=Date.now())return this.negar(sinIR?'Garita OCR no disponible; vuelve a presentar la placa':'Sin presencia IR reciente; vuelve a presentar la placa');
       const eventoId=this.authId(zona,p.id);
       const previo=await this.prisma.eventoBarrera.findUnique({where:{eventoId},include:{visita:true}});
       if(previo){
         if(previo.visita?.placa!==placa)return this.negar('Garita ya asociada a otro vehiculo');
         return {registrado:false,autorizado:!!previo.venceEn&&+previo.venceEn>Date.now(),motivo:'Autorizacion ya emitida',visita:previo.visita};
       }
+      if(sinIR&&this.ultimaPlacaOCR[zona]===placa&&!(zona==='SALIDA'&&this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa===placa))return this.negar('Placa repetida; espera otro vehiculo');
       const result=await this.tx(async tx=>{
         const ahora=new Date();
         const activa=await tx.visitaVehiculo.findUnique({where:{placaActiva:placa}});
@@ -214,7 +225,7 @@ export class GaritasService {
           const pagado=!!(ticket?.estado==='PAGADO'&&ticket.fechaLimiteSalida&&ticket.fechaLimiteSalida>=ahora);
           const sinCobro=salidaDemo()&&!this.salidaSinIR;
           let token=this.salidaPendiente?.id===p.id?this.salidaPendiente.token:undefined;
-          if(!pagado&&!sinCobro&&activa.usuarioId===null&&!token){
+          if(!pagado&&!sinCobro&&(activa.usuarioId===null||this.salidaSinIR)&&!token){
             token=randomBytes(24).toString('hex');
             const tokenAccesoHash=createHash('sha256').update(token).digest('hex');
             await tx.ticket.upsert({where:{visitaId:activa.id},create:{visitaId:activa.id,codigo:randomBytes(24).toString('hex'),tokenAccesoHash},update:{tokenAccesoHash}});
@@ -228,6 +239,7 @@ export class GaritasService {
         await tx.eventoBarrera.create({data:{eventoId,comandoId:p.id,visitaId,zona,tipoEvento:'AUTORIZACION',resultado:'AUTORIZADA',motivo,venceEn}});
         return {registrado:true,autorizado:true,evento:'AUTORIZACION_'+zona,visitaId,venceEn,motivo};
       });
+      if(sinIR&&(result.autorizado||(zona==='SALIDA'&&this.salidaPendiente?.id===p.id&&this.salidaPendiente.placa===placa)))this.ultimaPlacaOCR[zona]=placa;
       return result;
     });
   }
